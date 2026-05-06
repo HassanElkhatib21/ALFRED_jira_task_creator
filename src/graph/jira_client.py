@@ -186,3 +186,19 @@ async def add_to_sprint(client: httpx.AsyncClient, base_url: str, email: str, to
     )
     if r.status_code >= 400:
         raise JiraError(f"Sprint assignment failed [{r.status_code}]: {r.text}")
+
+
+async def search_issues(client: httpx.AsyncClient, base_url: str, email: str, token: str, jql: str, limit: int = 5) -> list[dict]:
+    """Search Jira issues using JQL."""
+    payload = {
+        "jql": jql,
+        "maxResults": limit,
+        "fields": ["summary", "status", "issuetype", "updated"]
+    }
+    r = await client.post(
+        f"{base_url}/rest/api/3/search",
+        json=payload,
+        auth=_auth(email, token)
+    )
+    r.raise_for_status()
+    return r.json().get("issues", [])

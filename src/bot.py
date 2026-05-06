@@ -3,6 +3,7 @@ import re
 import uuid
 import discord
 
+import httpx
 from src import config, user_store
 from src.graph.workflow import get_workflow
 from src.graph import nodes
@@ -19,6 +20,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.dm_messages = True
 client = discord.Client(intents=intents)
+tree = discord.app_commands.CommandTree(client)
 
 
 # user_id -> active LangGraph thread_id (so follow-up DMs continue the same conversation)
@@ -185,6 +187,132 @@ class ApprovalView(discord.ui.View):
         await self._resume(interaction, "reject")
 
 
+# ---------- slash commands ----------
+
+@tree.command(name="setup", description="Start the setup wizard for your Jira profile")
+async def cmd_setup(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    user_store.delete(str(user_id))
+    _active_threads.pop(user_id, None)
+    await interaction.response.send_message("Starting setup! Check your DMs.", ephemeral=True)
+    try:
+        await _start_setup(interaction.user, user_id, intro="🔄 Setting up your profile.")
+    except discord.Forbidden:
+        pass
+
+@tree.command(name="reset", description="Reset your Jira profile")
+async def cmd_reset(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    user_store.delete(str(user_id))
+    _active_threads.pop(user_id, None)
+    await interaction.response.send_message("Profile reset! You can run `/setup` to start over.", ephemeral=True)
+
+@tree.command(name="profile", description="View your current Jira profile configuration")
+async def cmd_profile(interaction: discord.Interaction):
+    profile = user_store.get(str(interaction.user.id))
+    if not user_store.is_complete(profile):
+        await interaction.response.send_message("You don't have a complete profile. Run `/setup` to configure it.", ephemeral=True)
+        return
+    embed = discord.Embed(title="Jira Profile", color=discord.Color.blue())
+    embed.add_field(name="Email", value=profile["email"], inline=False)
+    embed.add_field(name="Workspace URL", value=profile["base_url"], inline=False)
+    embed.add_field(name="Default Project", value=profile.get("default_project") or "None", inline=True)
+    embed.add_field(name="Default Board ID", value=str(profile.get("default_board") or "None"), inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+from src.graph import jira_client
+
+@tree.command(name="search", description="Search for Jira issues")
+@discord.app_commands.describe(query="Keyword or exact issue key to search for")
+async def cmd_search(interaction: discord.Interaction, query: str):
+    profile = user_store.get(str(interaction.user.id))
+    if not user_store.is_complete(profile):
+        await interaction.response.send_message("You must run `/setup` first.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=False)
+    # properly escape quotes in JQL
+    safe_query = query.replace('"', '\\"')
+    jql = f'text ~ "{safe_query}" OR issueKey = "{safe_query}" ORDER BY updated DESC'
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            issues = await jira_client.search_issues(
+                client, profile["base_url"], profile["email"], profile["api_token"], jql, limit=5
+            )
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Search failed: {e}")
+        return
+
+    if not issues:
+        await interaction.followup.send(f"No issues found matching `{query}`.")
+        return
+
+    embed = discord.Embed(title=f"Search Results for '{query}'", color=discord.Color.green())
+    for iss in issues:
+        key = iss["key"]
+        summary = iss["fields"]["summary"]
+        status = iss["fields"]["status"]["name"]
+        url = f'{profile["base_url"]}/browse/{key}'
+        embed.add_field(name=f"[{key}] {status}", value=f"[{summary}]({url})", inline=False)
+
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="recent", description="View your most recently updated Jira issues")
+async def cmd_recent(interaction: discord.Interaction):
+    profile = user_store.get(str(interaction.user.id))
+    if not user_store.is_complete(profile):
+        await interaction.response.send_message("You must run `/setup` first.", ephemeral=True)
+        return
+    if not profile.get("default_project"):
+        await interaction.response.send_message("You need a default project set up to use this command.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=False)
+    jql = f'project = "{profile["default_project"]}" ORDER BY updated DESC'
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            issues = await jira_client.search_issues(
+                client, profile["base_url"], profile["email"], profile["api_token"], jql, limit=5
+            )
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Fetch failed: {e}")
+        return
+
+    if not issues:
+        await interaction.followup.send(f"No recent issues found in project {profile['default_project']}.")
+        return
+
+    embed = discord.Embed(title=f"Recent Issues in {profile['default_project']}", color=discord.Color.green())
+    for iss in issues:
+        key = iss["key"]
+        summary = iss["fields"]["summary"]
+        status = iss["fields"]["status"]["name"]
+        url = f'{profile["base_url"]}/browse/{key}'
+        embed.add_field(name=f"[{key}] {status}", value=f"[{summary}]({url})", inline=False)
+
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="clear", description="Clear recent bot messages from the chat")
+async def cmd_clear(interaction: discord.Interaction, amount: int = 50):
+    await interaction.response.defer(ephemeral=True)
+    deleted = 0
+    try:
+        # If in a server and bot has manage_messages, purge all messages up to 'amount'
+        if interaction.guild and interaction.channel.permissions_for(interaction.guild.me).manage_messages:
+            deleted_msgs = await interaction.channel.purge(limit=amount)
+            deleted = len(deleted_msgs)
+        else:
+            # In DMs (or without permissions), the bot can only delete its own messages
+            async for msg in interaction.channel.history(limit=amount):
+                if msg.author.id == client.user.id:
+                    await msg.delete()
+                    deleted += 1
+        
+        await interaction.followup.send(f"✅ Cleared {deleted} messages.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Failed to clear messages: {e}", ephemeral=True)
+
+
 # ---------- main DM handler ----------
 
 @client.event
@@ -203,13 +331,6 @@ async def on_message(message: discord.Message):
     user_id = message.author.id
     channel = message.channel
     lowered = content.lower()
-
-    # Reset / re-setup
-    if lowered in ("/reset", "/setup", "reset", "setup"):
-        user_store.delete(str(user_id))
-        _active_threads.pop(user_id, None)
-        await _start_setup(channel, user_id, intro="🔄 Resetting your profile.")
-        return
 
     # In the middle of setup
     if await _handle_setup_reply(channel, user_id, content):
@@ -289,6 +410,11 @@ async def _run_request(user: discord.abc.User, channel: discord.abc.Messageable,
 async def on_ready():
     user_store.init()
     log.info("✅ Logged in as %s (id=%s)", client.user, client.user.id)
+    try:
+        await tree.sync()
+        log.info("✅ Slash commands synced globally.")
+    except Exception as e:
+        log.error("Failed to sync slash commands: %s", e)
     log.info("Bot is ready — DM to start.")
 
 
