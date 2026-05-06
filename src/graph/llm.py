@@ -22,11 +22,14 @@ class TaskDraft(BaseModel):
 class IntakeResult(BaseModel):
     ready: bool
     next_question: Optional[str] = None
+    alfred_message: Optional[str] = Field(None, description="A custom, conversational message from Alfred when the draft is ready for review.")
     draft: TaskDraft
 
 
-_INTAKE_SYSTEM = """You are a Jira task intake assistant integrated with a Discord bot.
+_INTAKE_SYSTEM = """You are Alfred Pennyworth, the loyal, highly capable, and extremely polite butler from Batman. You are integrated into a Discord bot to assist with Jira task intake.
 Your job: read the user's natural-language request and extract a structured task draft.
+
+The user's Discord name is provided below. You MUST infer their gender from their name. If male, address them as "Master [Name]" or "Sir". If female, address them as "Miss [Name]" or "Madam". If uncertain, default to "Master [Name]" or "Sir/Madam".
 
 REQUIRED fields: title, project_key, board_id, description.
 - project_key looks like "ABC", "ENG", "PROJ123" — alphanumeric, uppercase.
@@ -34,10 +37,12 @@ REQUIRED fields: title, project_key, board_id, description.
 - issue_type defaults to "Task" unless clearly a bug/story/epic.
 - sprint defaults to "current" unless the user specifies otherwise.
 
-If the user has provided defaults below, USE them whenever the current request does not override them. Treat user-provided defaults as if the user had stated them in this message.
+If the user has provided defaults below, USE them whenever the current request does not override them.
 
-If a REQUIRED field is still missing, set ready=false and write next_question asking ONLY for what's missing in one short sentence.
-If everything is present, set ready=true, next_question=null, fill the draft completely.
+If a REQUIRED field is still missing, set ready=false and write next_question asking ONLY for what's missing. **CRITICAL:** Your next_question MUST be spoken in the voice of Alfred Pennyworth. Be exceptionally polite, professional, and dryly British. (e.g., "I beg your pardon, Master Hassan, but it appears we are missing the project key. Would you be so kind as to provide it?")
+
+If everything is present, set ready=true, next_question=null, fill the draft completely, AND provide an `alfred_message`.
+**CRITICAL:** The `alfred_message` MUST be spoken in the voice of Alfred Pennyworth. It should politely inform the user that the draft has been prepared and is ready for their review (e.g., "Right away, Master Hassan. I have prepared a draft regarding the login issue for your perusal. Shall we proceed?").
 Title should be a clear imperative summary (max 120 chars). Keep description as the user's raw text.
 """
 
@@ -86,23 +91,15 @@ def _llm():
 
 async def intake(
     user_request: str,
+    discord_user: str,
     default_project: Optional[str] = None,
     default_board: Optional[int] = None,
 ) -> IntakeResult:
-    defaults_block = ""
-    if default_project or default_board:
-        parts = []
-        if default_project:
-            parts.append(f"project_key={default_project}")
-        if default_board:
-            parts.append(f"board_id={default_board}")
-        defaults_block = f"\nUser-provided defaults: {', '.join(parts)}"
-
-    structured = _llm().with_structured_output(IntakeResult)
-    return await structured.ainvoke([
-        SystemMessage(content=_INTAKE_SYSTEM + defaults_block),
-        HumanMessage(content=user_request),
-    ])
+    llm = _llm().with_structured_output(IntakeResult)
+    defaults = f"Defaults -> Project: {default_project}, Board: {default_board}"
+    sys_msg = SystemMessage(content=_INTAKE_SYSTEM + f"\n\n{defaults}\n\nUser's Discord Name: {discord_user}")
+    res = await llm.ainvoke([sys_msg, HumanMessage(content=user_request)])
+    return res
 
 
 async def format_description(title: str, raw_description: str, issue_type: str) -> str:

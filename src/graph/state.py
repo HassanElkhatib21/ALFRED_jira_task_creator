@@ -23,6 +23,7 @@ class GraphState(TypedDict, total=False):
     description: str
     ready: bool
     next_question: Optional[str]
+    alfred_message: Optional[str]
 
     # Filled by enrich
     sprint_id: Optional[int]

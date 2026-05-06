@@ -8,7 +8,8 @@ from src.graph.state import GraphState
 
 async def extract(state: GraphState) -> dict:
     result = await llm.intake(
-        state["request"],
+        user_request=state["request"],
+        discord_user=state["discord_user"],
         default_project=state.get("default_project"),
         default_board=state.get("default_board"),
     )
@@ -17,6 +18,7 @@ async def extract(state: GraphState) -> dict:
     out: dict = {
         "ready": result.ready,
         "next_question": result.next_question,
+        "alfred_message": getattr(result, "alfred_message", None),
     }
     if draft.title:
         out["title"] = draft.title.strip()
@@ -121,6 +123,7 @@ def build_preview(state: GraphState) -> dict:
         ],
         "description": state.get("formatted_description") or state["description"],
         "footer": "AI-organized preview. Approve to create in Jira.",
+        "alfred_message": state.get("alfred_message"),
     }
     return {"preview": preview}
 

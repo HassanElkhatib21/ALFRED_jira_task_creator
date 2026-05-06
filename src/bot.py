@@ -109,8 +109,8 @@ async def _handle_setup_reply(channel: discord.abc.Messageable, user_id: int, co
     if idx >= len(SETUP_STEPS):
         del _setup_pos[user_id]
         await channel.send(
-            "✅ All set! You can now describe a task in plain English and I'll draft a Jira issue for you.\n"
-            "Tip: send `/reset` anytime to redo this setup."
+            "✅ Excellent. Your profile is fully configured, sir/madam. You may now describe tasks to me in plain English, and I shall prepare the Jira issues for your review.\n"
+            "*A quick tip: Should you ever need to adjust these settings, simply use the `/reset` command.*"
         )
         return True
 
@@ -143,7 +143,7 @@ class ApprovalView(discord.ui.View):
     async def _resume(self, interaction: discord.Interaction, decision: str) -> None:
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
-                "Only the original requester can decide.", ephemeral=True
+                "I beg your pardon, but only the original requester may make this decision.", ephemeral=True
             )
             return
 
@@ -156,7 +156,7 @@ class ApprovalView(discord.ui.View):
         _active_threads.pop(self.requester_id, None)
 
         if decision == "reject":
-            await interaction.followup.send("❌ Cancelled — no Jira issue created.")
+            await interaction.followup.send("❌ Very well. I have cancelled the draft. No issue will be created.")
             return
 
         # Call create_jira_issue directly with the stored state
@@ -169,14 +169,14 @@ class ApprovalView(discord.ui.View):
             return
 
         if result.get("failure"):
-            await interaction.followup.send(f"⚠️ Jira error: {result['failure']}")
+            await interaction.followup.send(f"⚠️ I'm afraid there was a complication with Jira: {result['failure']}")
             return
         if result.get("issue_key"):
             await interaction.followup.send(
-                f"✅ Created **{result['issue_key']}** — {result['issue_url']}"
+                f"✅ Splendid. I have created **{result['issue_key']}** for you. You may view it here: {result['issue_url']}"
             )
         else:
-            await interaction.followup.send("⚠️ Workflow ended without creating an issue.")
+            await interaction.followup.send("⚠️ It appears the workflow concluded without generating an issue.")
 
     @discord.ui.button(label="Approve", style=discord.ButtonStyle.success, emoji="✅")
     async def approve(self, interaction: discord.Interaction, _: discord.ui.Button):
@@ -194,9 +194,9 @@ async def cmd_setup(interaction: discord.Interaction):
     user_id = interaction.user.id
     user_store.delete(str(user_id))
     _active_threads.pop(user_id, None)
-    await interaction.response.send_message("Starting setup! Check your DMs.", ephemeral=True)
+    await interaction.response.send_message("Right away. I have dispatched the setup instructions to your direct messages.", ephemeral=True)
     try:
-        await _start_setup(interaction.user, user_id, intro="🔄 Setting up your profile.")
+        await _start_setup(interaction.user, user_id, intro="🔄 Let us begin configuring your profile, shall we?")
     except discord.Forbidden:
         pass
 
@@ -205,13 +205,13 @@ async def cmd_reset(interaction: discord.Interaction):
     user_id = interaction.user.id
     user_store.delete(str(user_id))
     _active_threads.pop(user_id, None)
-    await interaction.response.send_message("Profile reset! You can run `/setup` to start over.", ephemeral=True)
+    await interaction.response.send_message("I have wiped your profile clean. You may invoke `/setup` when you are ready to begin anew.", ephemeral=True)
 
 @tree.command(name="profile", description="View your current Jira profile configuration")
 async def cmd_profile(interaction: discord.Interaction):
     profile = user_store.get(str(interaction.user.id))
     if not user_store.is_complete(profile):
-        await interaction.response.send_message("You don't have a complete profile. Run `/setup` to configure it.", ephemeral=True)
+        await interaction.response.send_message("I'm afraid your profile is incomplete. Please run `/setup` at your earliest convenience.", ephemeral=True)
         return
     embed = discord.Embed(title="Jira Profile", color=discord.Color.blue())
     embed.add_field(name="Email", value=profile["email"], inline=False)
@@ -227,7 +227,7 @@ from src.graph import jira_client
 async def cmd_search(interaction: discord.Interaction, query: str):
     profile = user_store.get(str(interaction.user.id))
     if not user_store.is_complete(profile):
-        await interaction.response.send_message("You must run `/setup` first.", ephemeral=True)
+        await interaction.response.send_message("I must ask that you run `/setup` before proceeding, sir/madam.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=False)
@@ -240,11 +240,11 @@ async def cmd_search(interaction: discord.Interaction, query: str):
                 client, profile["base_url"], profile["email"], profile["api_token"], jql, limit=5
             )
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Search failed: {e}")
+        await interaction.followup.send(f"⚠️ I regret to inform you the search failed: {e}")
         return
 
     if not issues:
-        await interaction.followup.send(f"No issues found matching `{query}`.")
+        await interaction.followup.send(f"I found no records matching `{query}`, I'm afraid.")
         return
 
     embed = discord.Embed(title=f"Search Results for '{query}'", color=discord.Color.green())
@@ -261,10 +261,10 @@ async def cmd_search(interaction: discord.Interaction, query: str):
 async def cmd_recent(interaction: discord.Interaction):
     profile = user_store.get(str(interaction.user.id))
     if not user_store.is_complete(profile):
-        await interaction.response.send_message("You must run `/setup` first.", ephemeral=True)
+        await interaction.response.send_message("I must ask that you run `/setup` before proceeding.", ephemeral=True)
         return
     if not profile.get("default_project"):
-        await interaction.response.send_message("You need a default project set up to use this command.", ephemeral=True)
+        await interaction.response.send_message("A default project must be configured to use this facility. Kindly set one up.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=False)
@@ -275,11 +275,11 @@ async def cmd_recent(interaction: discord.Interaction):
                 client, profile["base_url"], profile["email"], profile["api_token"], jql, limit=5
             )
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Fetch failed: {e}")
+        await interaction.followup.send(f"⚠️ I regret to inform you the fetch failed: {e}")
         return
 
     if not issues:
-        await interaction.followup.send(f"No recent issues found in project {profile['default_project']}.")
+        await interaction.followup.send(f"There are no recent issues in project {profile['default_project']} at this time.")
         return
 
     embed = discord.Embed(title=f"Recent Issues in {profile['default_project']}", color=discord.Color.green())
@@ -308,9 +308,9 @@ async def cmd_clear(interaction: discord.Interaction, amount: int = 50):
                     await msg.delete()
                     deleted += 1
         
-        await interaction.followup.send(f"✅ Cleared {deleted} messages.", ephemeral=True)
+        await interaction.followup.send(f"✅ I have swept away {deleted} messages, as requested.", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Failed to clear messages: {e}", ephemeral=True)
+        await interaction.followup.send(f"⚠️ I encountered an error while tidying up: {e}", ephemeral=True)
 
 
 # ---------- main DM handler ----------
@@ -342,8 +342,9 @@ async def on_message(message: discord.Message):
         await _start_setup(
             channel, user_id,
             intro=(
-                f"👋 Hey {message.author.display_name}! I can turn what you describe into Jira tasks. "
-                "First, I need a few one-time details."
+                f"👋 Good day, Master {message.author.display_name}! (Or should I say Madam?) "
+                "I am at your service to transform your requests into Jira tasks. "
+                "First, I require a few configuration details."
             ),
         )
         return
@@ -395,12 +396,12 @@ async def _run_request(user: discord.abc.User, channel: discord.abc.Messageable,
     preview = state.get("preview")
     if not preview:
         _active_threads.pop(user_id, None)
-        await channel.send("⚠️ Workflow produced no preview.")
+        await channel.send("⚠️ I apologize, but the workflow yielded no preview for me to present.")
         return
 
     view = ApprovalView(thread_id=thread_id, requester_id=user_id, state=state)
     await channel.send(
-        content="**Preview** — review and confirm:",
+        content=preview.get("alfred_message") or "**A draft has been prepared for your review, sir/madam:**",
         embed=_preview_embed(preview),
         view=view,
     )
