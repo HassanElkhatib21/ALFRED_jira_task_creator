@@ -196,7 +196,7 @@ async def search_issues(client: httpx.AsyncClient, base_url: str, email: str, to
         "fields": ["summary", "status", "issuetype", "updated"]
     }
     r = await client.post(
-        f"{base_url}/rest/api/3/search",
+        f"{base_url}/rest/api/3/search/jql",
         json=payload,
         auth=_auth(email, token)
     )
